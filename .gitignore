@@ -11,3 +11,4 @@ kube_config*
 cluster.rkestate
 cluster.yml
 *.ldif
+ldifgen
