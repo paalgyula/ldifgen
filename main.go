@@ -1,12 +1,13 @@
 package main
 
 import (
-	"github.com/ebauman/ldifgen/pkg/cmd"
-	"github.com/urfave/cli/v2"
 	"log"
 	"math/rand"
 	"os"
 	"time"
+
+	"github.com/ebauman/ldifgen/cmd"
+	"github.com/urfave/cli/v2"
 )
 
 func main() {

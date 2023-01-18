@@ -1,7 +1,9 @@
-package types
+package cmd
 
 import (
 	"strings"
+
+	"github.com/ebauman/ldifgen/pkg/ldif"
 )
 
 type GenerateConfig struct {
@@ -27,17 +29,15 @@ type GenerateConfig struct {
 type RenderConfig struct {
 	GenerateConfig
 
-	Users  []*User
+	Users  []*ldif.User
 	Domain []string
 	OUs    []string
-	Groups []*Group
+	Groups []*ldif.Group
 	Time   string
 }
 
 func (c RenderConfig) DC() string {
-	var domain = ""
-	domain = "dc=" + strings.Join(c.Domain, ",dc=")
-	return domain
+	return "dc=" + strings.Join(c.Domain, ",dc=")
 }
 
 func (c RenderConfig) TrimOU(ou string) string {

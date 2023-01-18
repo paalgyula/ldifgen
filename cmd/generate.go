@@ -1,23 +1,21 @@
 package cmd
 
 import (
+	_ "embed"
 	"fmt"
-	"github.com/ebauman/ldifgen/pkg/generators/groups"
-	"github.com/ebauman/ldifgen/pkg/generators/names"
-	"github.com/ebauman/ldifgen/pkg/generators/ous"
-	"github.com/ebauman/ldifgen/pkg/generators/users"
-	_ "github.com/ebauman/ldifgen/pkg/statik" // needed because of how statik imports things
-	"github.com/ebauman/ldifgen/pkg/types"
-	"github.com/rakyll/statik/fs"
-	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli/v2"
 	"html/template"
-	"io/ioutil"
+	"log"
 	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/ebauman/ldifgen/pkg/ldif"
+	"github.com/urfave/cli/v2"
 )
+
+//go:embed ldif.tmpl
+var templateData []byte
 
 const datasetString = "path to an alternative list of %s, used in %s generation. provide list of words, separated by newlines"
 
@@ -113,68 +111,37 @@ func GenerateCommand() *cli.Command {
 	}
 }
 
-func doGenerate(gconf *types.GenerateConfig) error {
-	statikFS, err := fs.New()
+func doGenerate(gconf *GenerateConfig) error {
+	tmpl, err := template.New("ldif").Parse(string(templateData))
 	if err != nil {
-		logrus.Fatalf("error building statik fs: %v", err)
+		log.Fatalf("error parsing ldif template: %v", err)
 	}
 
-	r, err := statikFS.Open("/template/ldif.txt")
+	// nameGen, err := generators.NewNameGenerator(gconf.FirstNameDataset, gconf.LastNameDataset, gconf.DepartmentDataset, gconf.BuzzwordDataset, gconf.GroupsDataset)
+	gen, err := ldif.NewGenerator(
+		ldif.WithDomain(strings.Join(gconf.Domain, ",")),
+	)
 	if err != nil {
-		logrus.Fatalf("error opening ldif template: %v", err)
+		log.Fatalf("error creating name generator: %v", err)
 	}
 
-	defer r.Close()
+	gen.GenerateOrgUnits(gconf.OUs, gconf.OUDepth)
 
-	data, err := ioutil.ReadAll(r)
-	if err != nil {
-		logrus.Fatalf("error reading ldif template: %v", err)
-	}
+	_, _ = gen.GenerateUsers(gconf.Users)
+	gg, _ := gen.GenerateGroups(gconf.Groups)
 
-	tmpl, err := template.New("ldif").Parse(string(data))
-	if err != nil {
-		logrus.Fatalf("error parsing ldif template: %v", err)
-	}
-
-	nameGen, err := names.NewNameGenerator(gconf.FirstNameDataset, gconf.LastNameDataset, gconf.DepartmentDataset, gconf.BuzzwordDataset, gconf.GroupsDataset)
-	if err != nil {
-		logrus.Fatalf("error creating name generator: %v", err)
-	}
-
-	ouList := ous.Generate(gconf.OUs, gconf.OUDepth, nameGen)
-
-	userGen, err := users.New(gconf.Domain, nameGen, ouList)
-	if err != nil {
-		logrus.Fatalf("error creating user generator: %v", err)
-	}
-
-	userList, err := userGen.GenerateN(gconf.Users)
-	if err != nil {
-		logrus.Fatalf("error generating users: %v", err)
-	}
-
-	groupGen, err := groups.New(gconf.Domain, nameGen, ouList, userList)
-	if err != nil {
-		logrus.Fatalf("error creating group generator: %v", err)
-	}
-
-	groupList, err := groupGen.GenerateN(gconf.Groups)
-	if err != nil {
-		logrus.Fatalf("error generating groups: %v", err)
-	}
-
-	renderConfig := types.RenderConfig{
+	renderConfig := RenderConfig{
 		GenerateConfig: *gconf,
-		Users:          userList,
+		Users:          gen.Users,
 		Domain:         gconf.Domain,
-		OUs:            ouList,
-		Groups:         groupList,
+		OUs:            gen.OrgUnits,
+		Groups:         gg,
 		Time:           time.Now().Format("2006-01-02T15:04:05-0700"),
 	}
 
 	err = tmpl.Execute(os.Stdout, renderConfig)
 	if err != nil {
-		logrus.Fatalf("error executing template: %v", err)
+		log.Fatalf("error executing template: %v", err)
 	}
 
 	return nil
@@ -183,65 +150,65 @@ func doGenerate(gconf *types.GenerateConfig) error {
 func generateLdif(ctx *cli.Context) error {
 	domainList, err := parseDomain(ctx.String("domain"))
 	if err != nil {
-		logrus.Fatalf("error parsing domain: %v", err)
+		log.Fatalf("error parsing domain: %v", err)
 	}
 
 	if ctx.Int("ou-depth") < 1 {
-		logrus.Fatalf("invalid ou depth (<1): %v", ctx.Int("ou-depth"))
+		log.Fatalf("invalid ou depth (<1): %v", ctx.Int("ou-depth"))
 	}
 
 	userClassList, err := parseClassList(ctx.String("user-classes"))
 	if err != nil {
-		logrus.Fatalf("error parsing user classes: %v", err)
+		log.Fatalf("error parsing user classes: %v", err)
 	}
 
 	ouClassList, err := parseClassList(ctx.String("ou-classes"))
 	if err != nil {
-		logrus.Fatalf("error parsing ou classes: %v", err)
+		log.Fatalf("error parsing ou classes: %v", err)
 	}
 
 	groupClassList, err := parseClassList(ctx.String("group-classes"))
 	if err != nil {
-		logrus.Fatalf("error parsing group classes: %v", err)
+		log.Fatalf("error parsing group classes: %v", err)
 	}
 
 	if ctx.String("user-change-type") == "" {
-		logrus.Fatalf("invalid user change type")
+		log.Fatalf("invalid user change type")
 	}
 
 	if ctx.String("group-change-type") == "" {
-		logrus.Fatalf("invalid group change type")
+		log.Fatalf("invalid group change type")
 	}
 
 	if ctx.String("ou-change-type") == "" {
-		logrus.Fatalf("invalid ou change type")
+		log.Fatalf("invalid ou change type")
 	}
 
 	if ctx.String("group-membership-attribute") == "" {
-		logrus.Fatalf("invalid group membership attribute")
+		log.Fatalf("invalid group membership attribute")
 	}
 
 	if ok := checkPath(ctx.String("buzzword-dataset")); !ok {
-		logrus.Fatalf("invalid buzzword dataset path: %s", ctx.String("buzzword-dataset"))
+		log.Fatalf("invalid buzzword dataset path: %s", ctx.String("buzzword-dataset"))
 	}
 
 	if ok := checkPath(ctx.String("department-dataset")); !ok {
-		logrus.Fatalf("invalid department dataset path: %s", ctx.String("department-dataset"))
+		log.Fatalf("invalid department dataset path: %s", ctx.String("department-dataset"))
 	}
 
 	if ok := checkPath(ctx.String("first-name-dataset")); !ok {
-		logrus.Fatalf("invalid first name dataset path: %s", ctx.String("first-name-dataset"))
+		log.Fatalf("invalid first name dataset path: %s", ctx.String("first-name-dataset"))
 	}
 
 	if ok := checkPath(ctx.String("last-name-dataset")); !ok {
-		logrus.Fatalf("invalid last name dataset path: %s", ctx.String("last-name-dataset"))
+		log.Fatalf("invalid last name dataset path: %s", ctx.String("last-name-dataset"))
 	}
 
 	if ok := checkPath(ctx.String("groups-dataset")); !ok {
-		logrus.Fatalf("invalid groups dataset path: %s", ctx.String("groups-dataset"))
+		log.Fatalf("invalid groups dataset path: %s", ctx.String("groups-dataset"))
 	}
 
-	generateConfig := &types.GenerateConfig{
+	generateConfig := &GenerateConfig{
 		Users:                    ctx.Int("users"),
 		Groups:                   ctx.Int("groups"),
 		OUs:                      ctx.Int("ous"),
@@ -276,7 +243,7 @@ func checkPath(path string) bool {
 }
 
 func parseDomain(domain string) (*[]string, error) {
-	re := regexp.MustCompile("(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]")
+	re := regexp.MustCompile(`(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]`)
 	if !re.Match([]byte(domain)) {
 		return nil, fmt.Errorf("invalid domain %s, regex failed", domain)
 	}
